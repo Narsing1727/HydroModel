@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
 import numpy as np
@@ -9,65 +10,64 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 app = FastAPI(title="HydroSphere Flood Prediction API 🌊")
 
+# ✅ Load ML assets
 model = joblib.load('flood_model.pkl')
 scaler = joblib.load('scaler.pkl')
 features = joblib.load('feature_names.pkl')
 
-print("✅ Model, Scaler, and Feature Names Loaded Successfully!")
-print("📊 Feature Count:", len(features))
+print("✅ Model Loaded")
 print("🧩 Features:", features)
 
-class InputData(BaseModel):
-    data: dict
+# ✅ Allow CORS (Frontend can call API)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Change to your domain after deployment
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class FloodInput(BaseModel):
+    rainfall: float = 0.0
+    ndvi: float = 0.0
+    distance_from_river: float = 0.0
+    slope: float = 0.0
 
 
 @app.post("/predict")
-def predict(input: InputData):
-    data = input.data
+def predict(input: dict):
+    # ✅ Convert user input to ordered feature vector
+    x = np.array([input.get(f, 0) for f in features]).reshape(1, -1)
 
-    x = np.array([data.get(f, 0) for f in features]).reshape(1, -1)
-
-
+    # ✅ Scale input
     x_scaled = scaler.transform(x)
 
+    # ✅ Model prediction
     prob = float(model.predict_proba(x_scaled)[0, 1])
     pred = int(prob > 0.5)
 
-
-    z_scores = abs((x - scaler.mean_) / (scaler.scale_ + 1e-6))
-    max_z = np.max(z_scores)
-    high_deviation_features = [features[i] for i, z in enumerate(z_scores[0]) if z > 3]
-
-    print("\n==============================")
-    print("📥 Raw Data Received:", data)
-    print("📏 Ordered Feature Vector:", dict(zip(features, x.flatten())))
-    print(f"📉 Scaler Mean Range: {np.min(scaler.mean_):.2f} → {np.max(scaler.mean_):.2f}")
-    print(f"📈 Max Input Z-Score: {max_z:.2f}")
-    if high_deviation_features:
-        print(f"⚠️ Features Out of Range (>3σ): {high_deviation_features}")
-    else:
-        print("✅ All input features within normal range.")
-    print(f"🔮 Flood Probability: {prob:.3f}")
+    print(f"\n📥 Input: {input}")
+    print(f"🔮 Probability: {prob:.3f}")
     print(f"🧠 Prediction: {'FLOOD' if pred == 1 else 'SAFE'}")
-    print("==============================\n")
 
-    
     return {
         "prediction": "FLOOD" if pred == 1 else "SAFE",
-        "probability": round(prob, 3),
-        "out_of_range_features": high_deviation_features,
-        "max_deviation": round(max_z, 2)
+        "probability": round(prob, 3)
     }
 
 
 @app.get("/")
 def home():
     return {
-        "message": "HydroSphere Flood Prediction API running ✅",
-        "status": "active",
-        "model_features": len(features)
+        "message": "HydroSphere ML API is running ✅",
+        "features_count": len(features)
     }
 
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+    
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=10000)
